@@ -1,177 +1,146 @@
 pragma circom 2.0.0;
 
-// Simple age verification circuit for Circom 2.x
+/*  Age ≥ 18  + commitment
+    public[0] = isAdult   (0/1)
+    public[1] = commitment
+*/
 template AgeVerification() {
-    // Private inputs (these won't be revealed in proof)
-    signal input birthDay;
-    signal input birthMonth;
-    signal input birthYear;
+    /* ── PRIVATE IN ─────────────────────────── */
+    signal input birthDay;        // 1-31
+    signal input birthMonth;      // 1-12
+    signal input birthYear;       // 1900-2010
     signal input salt;
-    
-    // Public inputs (these will be revealed)
+
+    /* ── PUBLIC IN ──────────────────────────── */
     signal input currentYear;
     signal input currentMonth;
     signal input currentDay;
-    
-    // Outputs
+
+    /* ── OUTPUTS ────────────────────────────── */
     signal output isAdult;
     signal output commitment;
-    
-    // Calculate age in years (simplified)
-    signal yearDiff;
-    yearDiff <== currentYear - birthYear;
-    
-    // Simple birthday check: if current month/day >= birth month/day
-    signal monthPassed;
-    signal dayPassed;
-    
-    // Month comparison (simplified)
-    component monthCheck = GreaterEqThan(4);
-    monthCheck.in[0] <== currentMonth;
-    monthCheck.in[1] <== birthMonth;
-    monthPassed <== monthCheck.out;
-    
-    // Day comparison (simplified) 
-    component dayCheck = GreaterEqThan(5);
-    dayCheck.in[0] <== currentDay;
-    dayCheck.in[1] <== birthDay;
-    dayPassed <== dayCheck.out;
-    
-    // Birthday has passed this year if month > birth_month OR (month == birth_month AND day >= birth_day)
-    signal sameMonth;
-    component monthEqual = IsEqual();
-    monthEqual.in[0] <== currentMonth;
-    monthEqual.in[1] <== birthMonth;
-    sameMonth <== monthEqual.out;
-    
-    // Fix non-quadratic constraint by breaking into simpler operations
+
+    /* ── Umur sederhana ─────────────────────── */
+    signal yearDiff      <== currentYear - birthYear;
+
+    component monthGE = GreaterEqThan(4);
+    monthGE.in[0] <== currentMonth;
+    monthGE.in[1] <== birthMonth;
+
+    component dayGE = GreaterEqThan(6);
+    dayGE.in[0] <== currentDay;
+    dayGE.in[1] <== birthDay;
+
+    component monthEQ = IsEqual();
+    monthEQ.in[0] <== currentMonth;
+    monthEQ.in[1] <== birthMonth;
+
+    // pecah perkalian utk hindari non-quadratic
+    signal temp1;        // monthEQ && dayGE
+    temp1 <== monthEQ.out * dayGE.out;
+
+    signal temp2;        // monthEQ && monthGE
+    temp2 <== monthEQ.out * monthGE.out;
+
     signal birthdayPassed;
-    signal temp1;
-    signal temp2;
-    
-    temp1 <== sameMonth * dayPassed;
-    temp2 <== monthPassed * sameMonth;
-    birthdayPassed <== monthPassed + temp1 - temp2;
-    
-    // Calculate actual age
-    signal actualAge;
-    actualAge <== yearDiff - 1 + birthdayPassed;
-    
-    // Check if age >= 18
-    component ageCheck = GreaterEqThan(7);
-    ageCheck.in[0] <== actualAge;
-    ageCheck.in[1] <== 18;
-    isAdult <== ageCheck.out;
-    
-    // Simple commitment (hash-like)
-    commitment <== birthDay + birthMonth * 100 + birthYear * 10000 + salt;
-    
-    // Range constraints
-    // birthDay: 1-31
-    signal dayValid1, dayValid2;
-    component dayMin = GreaterEqThan(5);
-    dayMin.in[0] <== birthDay;
-    dayMin.in[1] <== 1;
-    dayValid1 <== dayMin.out;
-    
-    component dayMax = LessThan(6);
-    dayMax.in[0] <== birthDay;
-    dayMax.in[1] <== 32;
-    dayValid2 <== dayMax.out;
-    
-    dayValid1 === 1;
-    dayValid2 === 1;
-    
-    // birthMonth: 1-12
-    signal monthValid1, monthValid2;
-    component monthMin = GreaterEqThan(4);
-    monthMin.in[0] <== birthMonth;
-    monthMin.in[1] <== 1;
-    monthValid1 <== monthMin.out;
-    
-    component monthMax = LessThan(4);
-    monthMax.in[0] <== birthMonth;
-    monthMax.in[1] <== 13;
-    monthValid2 <== monthMax.out;
-    
-    monthValid1 === 1;
-    monthValid2 === 1;
-    
-    // birthYear: 1900-2010
-    signal yearValid1, yearValid2;
-    component yearMin = GreaterEqThan(11);
-    yearMin.in[0] <== birthYear;
-    yearMin.in[1] <== 1900;
-    yearValid1 <== yearMin.out;
-    
-    component yearMax = LessThan(11);
-    yearMax.in[0] <== birthYear;
-    yearMax.in[1] <== 2011;
-    yearValid2 <== yearMax.out;
-    
-    yearValid1 === 1;
-    yearValid2 === 1;
+    birthdayPassed <== monthGE.out + temp1 - temp2;
+
+    signal actualAge <== yearDiff - 1 + birthdayPassed;
+
+    component ageGE = GreaterEqThan(7);   // umur <128
+    ageGE.in[0] <== actualAge;
+    ageGE.in[1] <== 18;
+    isAdult      <== ageGE.out;
+
+    /* ── Komitmen demo ──────────────────────── */
+    commitment <== birthDay
+                 + birthMonth * 100
+                 + birthYear * 10000
+                 + salt;
+
+    /* ── RANGE CONSTRAINTS ──────────────────── */
+    // birthDay 1–31
+    component dMin = GreaterEqThan(6);
+    dMin.in[0] <== birthDay;
+    dMin.in[1] <== 1;
+    dMin.out === 1;
+
+    component dMax = LessThan(6);
+    dMax.in[0] <== birthDay;
+    dMax.in[1] <== 32;
+    dMax.out === 1;
+
+    // birthMonth 1–12
+    component mMin = GreaterEqThan(4);
+    mMin.in[0] <== birthMonth;
+    mMin.in[1] <== 1;
+    mMin.out === 1;
+
+    component mMax = LessThan(4);
+    mMax.in[0] <== birthMonth;
+    mMax.in[1] <== 13;
+    mMax.out === 1;
+
+    // birthYear 1900–2010
+    component yMin = GreaterEqThan(11);
+    yMin.in[0] <== birthYear;
+    yMin.in[1] <== 1900;
+    yMin.out === 1;
+
+    component yMax = LessThan(11);
+    yMax.in[0] <== birthYear;
+    yMax.in[1] <== 2011;
+    yMax.out === 1;
 }
 
-// Greater than or equal template
-template GreaterEqThan(n) {
-    assert(n <= 252);
+/* ── UTILITIES ─────────────────────────────── */
+template GreaterEqThan(n){
+    assert(n<=252);
     signal input in[2];
     signal output out;
-    
     component lt = LessThan(n);
-    lt.in[0] <== in[1];
-    lt.in[1] <== in[0] + 1;
-    out <== 1 - lt.out;
+    lt.in[0] <== in[0];
+    lt.in[1] <== in[1];
+    out      <== 1 - lt.out;
 }
 
-// Less than template - FIXED
-template LessThan(n) {
-    assert(n <= 252);
+template LessThan(n){
+    assert(n<=252);
     signal input in[2];
     signal output out;
-    
-    component n2b = Num2Bits(n+1);  // Need n+1 bits to check bit position n
+    component n2b = Num2Bits(n+1);
     n2b.in <== in[0] + (1<<n) - in[1];
-    out <== 1 - n2b.out[n];
+    out    <== 1 - n2b.out[n];
 }
 
-// Number to bits template
-template Num2Bits(n) {
+template Num2Bits(n){
     signal input in;
     signal output out[n];
-    var lc1=0;
-    
-    var e2 = 1;
-    for (var i = 0; i<n; i++) {
-        out[i] <-- (in >> i) & 1;
-        out[i] * (out[i] -1 ) === 0;
-        lc1 += out[i] * e2;
-        e2 = e2 + e2;
+    var acc=0; var pow=1;
+    for (var i=0;i<n;i++){
+        out[i] <-- (in>>i)&1;
+        out[i]*(out[i]-1)===0;
+        acc += out[i]*pow;
+        pow += pow;
     }
-    
-    lc1 === in;
+    acc === in;
 }
 
-// Is equal template
-template IsEqual() {
-    signal input in[2];
-    signal output out;
-    
-    component isz = IsZero();
-    isz.in <== in[1] - in[0];
-    out <== isz.out;
-}
-
-// Is zero template
-template IsZero() {
+template IsZero(){
     signal input in;
     signal output out;
-    
     signal inv;
     inv <-- in!=0 ? 1/in : 0;
-    out <== -in*inv +1;
+    out <== -in*inv + 1;
     in*out === 0;
+}
+
+template IsEqual(){
+    signal input in[2];
+    signal output out;
+    component iz = IsZero();
+    iz.in <== in[0]-in[1];
+    out <== iz.out;
 }
 
 component main = AgeVerification();

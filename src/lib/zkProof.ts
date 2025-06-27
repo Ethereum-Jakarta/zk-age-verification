@@ -141,6 +141,9 @@ export class ZKProofGenerator {
 
       try {
         // Generate proof using snarkjs
+        if (!window.snarkjs || !window.snarkjs.groth16 || !window.snarkjs.groth16.fullProve) {
+          throw new Error('snarkjs is not loaded or not available on window');
+        }
         const { proof, publicSignals } = await window.snarkjs.groth16.fullProve(
           circuitInputs,
           this.wasmPath,
@@ -342,6 +345,14 @@ export class ZKProofGenerator {
       };
 
       // Verify proof
+      if (
+        typeof window === 'undefined' ||
+        !window.snarkjs ||
+        !window.snarkjs.groth16 ||
+        typeof window.snarkjs.groth16.verify !== 'function'
+      ) {
+        throw new Error('snarkjs or groth16.verify is not available on window');
+      }
       const isValid = await window.snarkjs.groth16.verify(
         vKey,
         proof.publicSignals,

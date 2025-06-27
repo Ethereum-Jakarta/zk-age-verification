@@ -1,240 +1,196 @@
-// SnarkJS loader utility
+// SnarkJS loader utility (TypeScript)
+// Handles dynamic <script> injection with retry + version helpers
+// Lints clean against @typescript-eslint/no-explicit-any and TS2790.
+
 export class SnarkjsLoader {
   private static loaded = false;
   private static loading = false;
   private static loadPromise: Promise<void> | null = null;
 
   /**
-   * Load snarkjs library dynamically
+   * Dynamically load snarkjs from a CDN (with retry & caching).
    */
   static async load(): Promise<void> {
-    // If already loaded, return immediately
-    if (this.loaded && window.snarkjs) {
-      return Promise.resolve();
+    // Already loaded → exit fast
+    if (this.loaded && typeof window !== 'undefined' && window.snarkjs) {
+      return;
     }
 
-    // If currently loading, return the existing promise
+    // In‑flight request → await the same promise
     if (this.loading && this.loadPromise) {
       return this.loadPromise;
     }
 
-    // Start loading
+    // Begin loading
     this.loading = true;
     this.loadPromise = this.loadSnarkjs();
 
     try {
       await this.loadPromise;
       this.loaded = true;
-      this.loading = false;
       console.log('✅ SnarkJS loaded successfully');
-    } catch (error) {
+    } finally {
+      // always reset loading flag
       this.loading = false;
-      this.loadPromise = null;
-      console.error('❌ Failed to load SnarkJS:', error);
-      throw error;
     }
 
     return this.loadPromise;
   }
 
-  /**
-   * Check if snarkjs is available
-   */
+  /** Check global availability */
   static isLoaded(): boolean {
-    return typeof window !== 'undefined' && 
-           !!window.snarkjs && 
-           this.loaded;
+    return typeof window !== 'undefined' && !!window.snarkjs && this.loaded;
   }
 
-  /**
-   * Get loading status
-   */
+  /** Whether a load() call is currently in progress */
   static isLoading(): boolean {
     return this.loading;
   }
 
-  /**
-   * Force reload snarkjs
-   */
+  /** Force a fresh reload (e.g. after CDN failure) */
   static async reload(): Promise<void> {
     this.loaded = false;
     this.loading = false;
     this.loadPromise = null;
-    
-    // Remove existing script if present
-    const existingScript = document.querySelector('script[src*="snarkjs"]');
-    if (existingScript) {
-      existingScript.remove();
+
+    // Remove any existing <script> tag
+    if (typeof document !== 'undefined') {
+      const existing = document.querySelector<HTMLScriptElement>('script[src*="snarkjs"]');
+      existing?.remove();
     }
-    
-    // Clear window.snarkjs
-    if (window.snarkjs) {
-      delete window.snarkjs;
-    }
-    
+
+    // Clear the cached global (avoid TS2790 delete issue)
+    (window as { snarkjs?: unknown }).snarkjs = undefined;
+
     return this.load();
   }
 
-  /**
-   * Internal method to load snarkjs script
-   */
+  /** Low‑level script injection with multiple fall‑back CDNs */
   private static loadSnarkjs(): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Check if we're in browser environment
       if (typeof window === 'undefined' || typeof document === 'undefined') {
-        reject(new Error('Not in browser environment'));
+        reject(new Error('Not running in a browser environment'));
         return;
       }
 
-      // Check if snarkjs is already available globally
       if (window.snarkjs) {
-        console.log('SnarkJS already available globally');
+        // already present via other means
+        this.loaded = true;
         resolve();
         return;
       }
 
-      // Create and load script
-      const script = document.createElement('script');
-      script.type = 'text/javascript';
-      script.async = true;
-      
-      // Try multiple CDN sources for reliability
       const sources = [
         'https://unpkg.com/snarkjs@latest/build/snarkjs.min.js',
         'https://cdn.jsdelivr.net/npm/snarkjs@latest/build/snarkjs.min.js',
         'https://cdn.skypack.dev/snarkjs'
       ];
 
-      let currentSourceIndex = 0;
+      let idx = 0;
+      const script = document.createElement('script');
+      script.type = 'text/javascript';
+      script.async = true;
 
-      const tryLoadSource = () => {
-        if (currentSourceIndex >= sources.length) {
+      const tryNextSource = (): void => {
+        if (idx >= sources.length) {
           reject(new Error('All SnarkJS sources failed to load'));
           return;
         }
 
-        script.src = sources[currentSourceIndex];
-        console.log(`Attempting to load SnarkJS from: ${script.src}`);
+        script.src = sources[idx];
+        console.log(`📦 Attempting to load SnarkJS from: ${script.src}`);
+        idx += 1;
+
+        const timeoutId = window.setTimeout(() => {
+          console.warn(`⏰ Timeout loading ${script.src}`);
+          tryNextSource();
+        }, 10_000);
 
         script.onload = () => {
-          // Wait a bit for the global object to be available
+          window.clearTimeout(timeoutId);
+          // Wait a tiny tick so global attaches
           setTimeout(() => {
             if (window.snarkjs) {
-              console.log(`✅ SnarkJS loaded successfully from: ${script.src}`);
               resolve();
             } else {
-              console.warn(`Script loaded but snarkjs not available from: ${script.src}`);
-              currentSourceIndex++;
-              tryLoadSource();
+              console.warn(`⚠️ Script loaded but snarkjs global missing: ${script.src}`);
+              tryNextSource();
             }
           }, 100);
         };
 
-        script.onerror = (error) => {
-          console.warn(`Failed to load from: ${script.src}`, error);
-          currentSourceIndex++;
-          tryLoadSource();
-        };
-
-        // Add timeout for each attempt
-        const timeout = setTimeout(() => {
-          console.warn(`Timeout loading from: ${script.src}`);
-          currentSourceIndex++;
-          tryLoadSource();
-        }, 10000); // 10 second timeout
-
-        script.onload = () => {
-          clearTimeout(timeout);
-          setTimeout(() => {
-            if (window.snarkjs) {
-              console.log(`✅ SnarkJS loaded successfully from: ${script.src}`);
-              resolve();
-            } else {
-              console.warn(`Script loaded but snarkjs not available from: ${script.src}`);
-              currentSourceIndex++;
-              tryLoadSource();
-            }
-          }, 100);
+        script.onerror = (err) => {
+          window.clearTimeout(timeoutId);
+          console.warn(`❌ Failed loading ${script.src}`, err);
+          tryNextSource();
         };
       };
 
-      // Start loading
-      tryLoadSource();
+      tryNextSource();
       document.head.appendChild(script);
     });
   }
 
-  /**
-   * Preload snarkjs with retry mechanism
-   */
+  /** Preload with exponential retry */
   static async preload(maxRetries = 3): Promise<void> {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
       try {
-        console.log(`📦 Loading SnarkJS (attempt ${attempt}/${maxRetries})...`);
+        console.log(`🔄 Loading SnarkJS (attempt ${attempt}/${maxRetries})…`);
         await this.load();
-        return;
-      } catch (error) {
-        console.warn(`Attempt ${attempt} failed:`, error);
-        
-        if (attempt === maxRetries) {
-          throw new Error(`Failed to load SnarkJS after ${maxRetries} attempts`);
-        }
-        
-        // Wait before retry
-        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        return; // success
+      } catch (err) {
+        if (attempt === maxRetries) throw err;
+        console.warn(`Retrying SnarkJS load (${attempt})…`);
+        await new Promise((r) => setTimeout(r, 1_000 * attempt));
       }
     }
   }
 
-  /**
-   * Get SnarkJS version if available
-   */
+  /** Return reported snarkjs version, if any */
   static getVersion(): string | null {
-    if (this.isLoaded() && window.snarkjs?.version) {
-      return window.snarkjs.version;
-    }
-    return null;
+    return this.isLoaded() && (window.snarkjs as { version?: string }).version || null;
   }
 
-  /**
-   * Test SnarkJS functionality
-   */
+  /** Quick self‑test (checks groth16 presence) */
   static async test(): Promise<boolean> {
-    if (!this.isLoaded()) {
-      return false;
-    }
-
+    if (!this.isLoaded()) return false;
     try {
-      // Test if groth16 module is available
-      if (!window.snarkjs.groth16) {
-        console.error('SnarkJS groth16 module not available');
-        return false;
-      }
-
-      console.log('✅ SnarkJS test passed');
-      return true;
-    } catch (error) {
-      console.error('❌ SnarkJS test failed:', error);
+      return !!window.snarkjs?.groth16;
+    } catch {
       return false;
     }
   }
 }
 
-// Global type declaration
+// ───────────────────────────────────────────────────────────
+// Global ambient types
+// ───────────────────────────────────────────────────────────
+
 declare global {
   interface Window {
-    snarkjs: {
+    snarkjs?: {
       groth16: {
-        fullProve: (input: any, wasmPath: string, zkeyPath: string) => Promise<any>;
-        verify: (vKey: any, publicSignals: any, proof: any) => Promise<boolean>;
-        prove: (zkeyPath: string, witness: any) => Promise<any>;
+        fullProve: (
+          input: Record<string, unknown>,
+          wasmPath: string,
+          zkeyPath: string
+        ) => Promise<Record<string, unknown>>;
+        verify: (
+          vKey: Record<string, unknown>,
+          publicSignals: string[],
+          proof: Record<string, unknown>
+        ) => Promise<boolean>;
+        prove: (
+          zkeyPath: string,
+          witness: Record<string, unknown>
+        ) => Promise<Record<string, unknown>>;
       };
       version?: string;
     };
   }
 }
 
-// Export for convenience
+// Handy re‑exports
 export const loadSnarkjs = SnarkjsLoader.load.bind(SnarkjsLoader);
 export const isSnarkjsLoaded = SnarkjsLoader.isLoaded.bind(SnarkjsLoader);
 export const preloadSnarkjs = SnarkjsLoader.preload.bind(SnarkjsLoader);
